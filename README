@@ -1,1 +1,96 @@
-readme for 1-2-3-SV tool
+1-2-3-SV pipeline description
+Pipeline is available from gitHub, under URL https://github.com/Vityay/1-2-3-SV
+
+1. NGS data alignment
+
+The sequencing data for the pipeline can be mapped with any tool that supports
+BAM output format or outputs format that can be converted to BAM. We used BWA
+(http://bio-bwa.sourceforge.net/) version 0.5.9 and used separate mapping of
+Forward and Reverse tags (samse command of bwa aligner). Data mapped in paired
+fashion ( sampe ) can also be used by the pipeline, however we must note that
+results of relative placement of tags may substantially differ between these
+two approaches.
+
+Read names should match between forward and reverse tags or become the same
+after trimming (trim option in configuration file). 
+
+2. Estimation of insert size distribution and location of discordant tags
+
+This step is performed separately for each library. It outputs distribution
+of insert sizes and files that capture location of discordantly mapped reads
+for each type: inverted, everted and remote (forward and reverse tags mapped
+to different chromosomes). When two BAMs are supplied, it is assumed that
+mapping was done in independent way. When analyzing one BAM file, paired
+mapping mode is expected. Potential PCR duplicates (clones from the same library
+that share same mapping locations of tags) are discarded. A user can specify to
+discard reads that do not fulfill his/her criteria for unique mapping :
+uniqueness of mapping(max_ambiguity = X0), absence of secondary hits 
+(secondary_hits = X1), absence of gaps(alignment_gaps = XO), or even mismatches
+(alignment_mismatches = XM) in the read-to-reference alignment. When big datasets   
+need to be analysed on a workstation with small RAM size analysis can be
+serialized (“chunks” option), at the expense of additional computation time.
+
+Modify: configuration file 123SV.conf
+Run: 123SV1.pl <library_id>
+Example: perl 123SV1.pl 1
+ 
+3. Clustering of discordant pairs at population level 
+
+This step of analysis is done separately for pairs with discordant orientation
+of tags (everted, inverted and remote) and pairs with discordant distance
+between tags (insertion and deletion). Clustering of discordant pairs is done
+in agglomerative manner. Two pairs are considered to belong to the same cluster
+when distance between coordinates of their 5-prime tags together with distance
+between 3-prime tags does not exceed x times median distance of the library with
+bigger insert sizes (from the two libraries where the clones belong).  Parameter
+x is given by “SV_max_distance” parameter in configuration file and is set to 1
+by default. Search is continued until no clusters with at least “SV_min_clones”
+can be found.
+
+This step can be serialized by chromosomes or genome ranges to limit memory
+usage and speed up the analysis by running as different processes (e.g. on
+different nodes of a cluster system). 
+
+Run: 123SV2.pl
+Example: perl 123SV2.pl deletion 0 
+
+4. Output format
+As discordant pair analysis does not give exact breakpoints of structural
+variants, the output lists genome segments containing each breakpoint along
+with information about source of the clones (samples) that contributed to the
+cluster and the properties of the cluster.
+
+Columns 1-3: Chromosome, start position and end position of range where first
+breakpoint can be found.
+
+Columns 4-6: Chromosome, start position and end position of range where second
+breakpoint can be found.
+
+Column 7: Libraries and number of clones that contributed to the SV call. String
+lists library IDs (as given in configuration file) followed by number of clones
+in brackets.
+
+Column 8: Relative orientation and strand of the tag pairs in the SV call.
+Specifies the number of observed tags that link first segment to second in
+“tail-to-head” (TH, 3-prime of first segment is linked to 5-prime of second
+segment) or any other combination. Strand of first read in the pair is reflected
+as well: big caps for plus strand (e.g. 'TH') and small caps for minus strand
+(e.g. 'th').
+
+Column 9: Total number of tag pairs that triggered the SV call 
+
+Column 10: Proportion of  tag pairs that overlap with each other ( can be
+significantly below 100% when  independent SVs were grouped into single
+cluster/SV call.
+
+Column 11: Expected distance between first and second segments (given in
+columns 1-3 and 4-6) estimated by most optimal fitting with insert size
+distribution observed at step #2. Significantly negative values may represent
+complex SV events with local rearrangement of genomic segments.
+
+Column 12: Relative probability (compared to a “best case” scenario where
+all pairs have modal insert size) through all clones in the cluster.  Low values
+( < 0.4 ) may indicate compound SV clusters and can be avoided by lowering
+SV_max_distance parameter in configuration file.
+
+
