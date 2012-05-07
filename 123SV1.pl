@@ -96,7 +96,7 @@ sub read_paired {
             # Forward read
             unless (eof(F1)) {
                 my $line1 = <F1>;
-                my ( $chr, $pos, $strand, $clone ) = get_coord( $lib_id, $line1 );
+                my ( $chr, $pos, $strand, $clone, $dir ) = get_coord( $lib_id, $line1 );
                 report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not(++$lines_read % 1_000_000);
                 
                 # Check whether we need this clone 
@@ -111,15 +111,22 @@ sub read_paired {
                 if ( $chr and $in_chunk ) { # Unambig mapped tag
                     die "error: multiple mapping position of forward tag for clone $clone" if exists( $fwd{ $clone } );
 
-                    $fwd{$clone} = join("\t", $chr, $strand, $pos ); 
-                    process_ditag( $clone, $lib_type ) if ( exists( $rev{$clone} ) );
+                    if ( $dir eq 'F' ) {
+                        $fwd{$clone} = join("\t", $chr, $strand, $pos ); 
+                        process_ditag( $clone, $lib_type ) if ( exists( $rev{$clone} ) );
+                    }
+                    elsif ($dir eq 'R' ) {
+                        $rev{$clone} = join("\t", $chr, $strand, $pos ); 
+                        process_ditag( $clone, $lib_type ) if ( exists( $fwd{$clone} ) );
+                    }
                 }
             }
 
             # Reverse read
             unless ( eof(F2) ) {
                 my $line1 = <F2>;
-                my ( $chr, $pos, $strand, $clone ) = get_coord( $lib_id, $line1 );
+                my ( $chr, $pos, $strand, $clone, $dir ) = get_coord( $lib_id, $line1 );
+                $dir = 'R';
                 report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not( ++$lines_read % 1_000_000);
                 
                 # Check whether we need this clone 
@@ -179,7 +186,8 @@ sub get_coord {
     foreach my $trim ( $cfg{$lib}{'trim'} ) {
         $clone =~ s/$trim// if $trim;
     }
-    return ( $c, $p, $strand, $clone );
+    my $dir = $map_flag & 128 ? 'R' : 'F';
+    return ( $c, $p, $strand, $clone, $dir );
 }
 
 sub process_ditag {
