@@ -91,9 +91,9 @@ sub read_paired {
     warn 'Determining insert sizes for lib # ', $lib_id, ' : type ', $lib_type, ' in ', $cfg{$lib_id}{'chunks'}, " chunks\n";
     open FDIST, '>', 'sv_size_distribution.'.$lib;
     open FSTAT, '>', 'sv_pairs_stats.'.$lib;
-    open FNUCR, '>', 'sv_pairs_remote.'.$lib;
-    open FNUCI, '>', 'sv_pairs_inversions.'.$lib;
-    open FNUCE, '>', 'sv_pairs_evertions.'.$lib;
+    open FNUCR, '| gzip -c >sv_pairs_remote.'.$lib;
+    open FNUCI, '| gzip -c >sv_pairs_inversions.'.$lib;
+    open FNUCE, '| gzip -c >sv_pairs_evertions.'.$lib;
     foreach my $chunk2 ( 0 .. ( $cfg{$lib_id}{'chunks'} - 1 ) ) {
         $chunk = $chunk2;
         undef %fwd;
@@ -105,7 +105,7 @@ sub read_paired {
             # Forward read
             unless (eof(F1)) {
                 my $line1 = <F1>;
-                my ( $clone, $chr, $pos, $strand, $dir ) = get_coord( $lib_id, $line1 );
+                my ( $clone, $chr, $pos, $pos2, $strand, $dir ) = get_coord( $lib_id, $line1 );
                 report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not(++$lines_read % 10_000);
                 if ( !$clone or not(in_chunk($clone)) ) { # not from lib or chunk
                     ; #do nothings
@@ -124,12 +124,12 @@ sub read_paired {
                     }
                     else {
                         if ( $dir eq 'F' ) {
-                            $fwd{$clone} = join("\t", $chr, $strand, $pos );
+                            $fwd{$clone} = join("\t", $chr, $strand, $pos, $pos2 );
                             $f++; 
                             process_ditag( $clone, $lib_type ) if ( exists( $rev{$clone} ) );
                         }
                         elsif ($dir eq 'R' ) {
-                            $rev{$clone} = join("\t", $chr, $strand, $pos );
+                            $rev{$clone} = join("\t", $chr, $strand, $pos, $pos2 );
                             $r++; 
                             process_ditag( $clone, $lib_type ) if ( exists( $fwd{$clone} ) );
                         }
@@ -140,7 +140,7 @@ sub read_paired {
             # Reverse read
             unless ( $cfg{$lib_id}{'fileR'}and eof(F2) ) {
                 my $line1 = <F2>;
-                my ( $clone, $chr, $pos, $strand, $dir ) = get_coord( $lib_id, $line1 );
+                my ( $clone, $chr, $pos, $pos2, $strand, $dir ) = get_coord( $lib_id, $line1 );
                 $dir = 'R';
                 #report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not( ++$lines_read % 10_000);
                 if ( !$clone or not(in_chunk($clone)) ) { # not from lib or chunk
@@ -159,7 +159,7 @@ sub read_paired {
                         free($clone);
                     }
                     else {
-                        $rev{$clone} = join("\t", $chr, $strand, $pos );
+                        $rev{$clone} = join("\t", $chr, $strand, $pos, $pos2 );
                         $r++; 
                         process_ditag( $clone, $lib_type ) if ( exists( $fwd{$clone} ) );
                     }
@@ -174,7 +174,7 @@ sub read_paired {
 
 sub get_coord {
     my ( $lib, $line ) = @_;
-    my ( $clone, $map_flag, $c, $p, $qual, $match ) = split /\t/, $line;
+    my ( $clone, $map_flag, $c, $p1, $qual, $match ) = split /\t/, $line;
 
     # Skip if prefix unless multi-lib BAM and prefix is specified
     if ( $cfg{$lib}{'prefix'} ) {
@@ -194,35 +194,35 @@ sub get_coord {
     return($clone) if exists($cfg{'Distribution'}{'alignment_gaps'}) and $line =~ m/XO\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'alignment_gaps'};
     return($clone) if exists($cfg{'Distribution'}{'alignment_mismatches'}) and $line =~ m/XM\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'alignment_mismatches'};
 
-    my $strand = '+';
-    if ( $map_flag & 16 ) {
-        die "Unexpected match pattern: $match" unless $match =~ m/^[\dDIMS]+$/;
-        my $shift = 0;
-        while ( $match =~ m/(\d+)([DIMS])/g ) {
-            $shift += $1 if $2 eq 'M' or $2 eq 'D';
-        }
-        $p += $shift - 1;
-        $strand = '-';
+    die "Unexpected match pattern: $match" unless $match =~ m/^[\dDIMS]+$/;
+    my $p2 = $p1-1;
+    while ( $match =~ m/(\d+)([DIMS])/g ) {
+        $p2 += $1 if $2 eq 'M' or $2 eq 'D';
     }
-    # Trim when needed
+    my $strand = $map_flag & 16 ? '-' : '+';
     my $dir = $map_flag & 128 ? 'R' : 'F';
-    return( $clone, $c, $p, $strand, $dir );
+    return( $clone, $c, $p1, $p2, $strand, $dir );
 }
 
 sub process_ditag {
     my $clo = shift;
     my $lib_tp = shift;
-    my ( $c1, $s1, $p1 ) = split /\t/, $fwd{$clo};
-    my ( $c2, $s2, $p2 ) = split /\t/, $rev{$clo};
+    my ( $c1, $s1, $p1, $p1a ) = split /\t/, $fwd{$clo};
+    my ( $c2, $s2, $p2, $p2a ) = split /\t/, $rev{$clo};
 
     my $ab = 1;
     $stats{'total'}++;
-    if ( $c1 ne $c2 or abs($p1 - $p2 ) > $cfg{'Distribution'}{'max_distance'} ) { # remotely located di-tags
-        return if $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1; # we do not take it into account 
+    if ( $c1 ne $c2 ) { # translocation
+        if ( $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1 ) {
+            delete $fwd{$clo};
+            delete $rev{$clo};
+            return;
+        }
         $stats{'remote'}++;
         $stats{'nonclonal'}++;
-        ( $c1, $c2, $p1, $p2 ) = ( $c2, $c1, $p2, $p1 ) if $c1 lt $c2 or ( $c1 eq $c2 and $p1 > $p2 );
-        print FNUCR join( "\t", $c1, int($p1/$cfg{'General'}{'bin_size'}), $c2, int($p2/$cfg{'General'}{'bin_size'})), "\n";
+	#( $c1, $c2, $p1, $p2, $s1, $s2 ) = ( $c2, $c1, $p2, $p1, $s2, $s1 ) if $c1 lt $c2 or ( $c1 eq $c2 and $p1 > $p2 );
+        #print FNUCR join( "\t", $c1, int($p1/$cfg{'General'}{'bin_size'}), $c2, int($p2/$cfg{'General'}{'bin_size'})), "\n";
+        print FNUCR join( "\t", $c1, $p1, $p1a, $s1, $c2, $p2, $p2a, $s2 ), "\n";
     } 
     else { # local
         my $ori = ditag_ori($p1, $p2, $s1.$s2, $lib_tp);
@@ -231,22 +231,31 @@ sub process_ditag {
         }    
         $stats{$ori}++;
         $stats{'local'}++; 
-        if (uc($ori) eq 'TH') { # correctly oriented
+        if (uc($ori) eq 'TH') { # correctly oriented - only used for distribution
             $distr{abs($p1-$p2)+1}++;
             $stats{'consistent'}++;
             $stats{'balance'}++ if $ori eq 'TH';
             $stats{'balance'}-- if $ori eq 'th';
-             
         }
         elsif ( uc($ori) eq 'HT' ) { # evertion
-            return if $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1; # we do not take it into account 
-            ( $p1, $p2 ) = ( $p2, $p1 ) if $p1 > $p2; 
-            print FNUCE join( "\t", $c1, int($p1/$cfg{'General'}{'bin_size'}), int($p2/$cfg{'General'}{'bin_size'})), "\n";
+            if ( $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1 ) {
+                delete $fwd{$clo};
+                delete $rev{$clo};
+                return;
+            }
+            #( $p1, $p2 ) = ( $p2, $p1 ) if $p1 > $p2; 
+            print FNUCE join( "\t", $c1, $p1, $p1a, $s1, $c2, $p2, $p2a, $s2 ), "\n";
+            #print FNUCE join( "\t", $c1, int($p1/$cfg{'General'}{'bin_size'}), int($p2/$cfg{'General'}{'bin_size'})), "\n";
         }
         else { #inversion
-            return if $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1; # we do not take it into account 
-            ( $p1, $p2 ) = ( $p2, $p1 ) if $p1 > $p2; 
-            print FNUCI join( "\t", $c1, int($p1/$cfg{'General'}{'bin_size'}), int($p2/$cfg{'General'}{'bin_size'})), "\n";
+            if ( $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1 ) {
+                delete $fwd{$clo};
+                delete $rev{$clo};
+                return;
+            }
+            #( $p1, $p2 ) = ( $p2, $p1 ) if $p1 > $p2; 
+            #print FNUCI join( "\t", $c1, int($p1/$cfg{'General'}{'bin_size'}), int($p2/$cfg{'General'}{'bin_size'})), "\n";
+            print FNUCI join( "\t", $c1, $p1, $p1a, $s1, $c2, $p2, $p2a, $s2 ), "\n";
         }     
         $stats{'nonclonal'}++;
     }
