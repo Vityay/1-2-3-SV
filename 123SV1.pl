@@ -6,6 +6,8 @@ use Config::Std;
 # v 0.04
 # Last modified 20120506
 
+STDOUT->autoflush(1);
+
 my %cfg = ();
 my ( $chunk, $lib_id );
 my $chunk_count = 1;
@@ -14,6 +16,8 @@ my $r = 0;
 die "Cannot read configuration file 123SV.conf" unless -r '123SV.conf';
 read_config( '123SV.conf' => %cfg );
 check_parameters();
+
+
 
 my %lib_ids = ();
 while ( my $lib = shift ) {
@@ -95,14 +99,14 @@ sub read_paired {
         undef %fwd;
         undef %rev;
         warn 'Started with chunk ', ($chunk + 1), ' of ', $cfg{$lib_id}{'chunks'}, ' for lib # ', $lib_id,' : ', $lib,' type ', $lib_type, "\n";
-        open F1, $cfg{'General'}{'samtools_exe'}.' view '.$cfg{$lib_id}{'fileF'}.'|' or die 'Could not open file with forward tags for lib '.$lib;
-        open F2, $cfg{'General'}{'samtools_exe'}.' view '.$cfg{$lib_id}{'fileR'}.'|' or die 'Could not open file with reverse tags for lib '.$lib;
+        open F1, $cfg{'General'}{'samtools_exe'}.' view -F 4 '.$cfg{$lib_id}{'fileF'}.'|' or die 'Could not open file with forward tags for lib '.$lib;
+        open F2, $cfg{'General'}{'samtools_exe'}.' view -F 4 '.$cfg{$lib_id}{'fileR'}.'|' or die 'Could not open file with reverse tags for lib '.$lib;
         while ( !eof(F1) or !eof(F2) ) {
             # Forward read
             unless (eof(F1)) {
                 my $line1 = <F1>;
                 my ( $clone, $chr, $pos, $strand, $dir ) = get_coord( $lib_id, $line1 );
-                report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not(++$lines_read % 1_000_000);
+                report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not(++$lines_read % 10_000);
                 if ( !$clone or not(in_chunk($clone)) ) { # not from lib or chunk
                     ; #do nothings
                 }
@@ -138,7 +142,7 @@ sub read_paired {
                 my $line1 = <F2>;
                 my ( $clone, $chr, $pos, $strand, $dir ) = get_coord( $lib_id, $line1 );
                 $dir = 'R';
-                report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not( ++$lines_read % 1_000_000);
+                #report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not( ++$lines_read % 10_000);
                 if ( !$clone or not(in_chunk($clone)) ) { # not from lib or chunk
                     ; #do nothing
                 }
@@ -269,40 +273,28 @@ sub ditag_ori {
 }
 
 sub report_stats {
-    my $curr_chr = shift;
-    my $curr_pos = shift;
-    my $lib_id2  = shift;
-    my $curr_chunk   = shift;
-    my $chunks   = shift;
+    my ( $curr_chr, $curr_pos, $lib_id2, $curr_chunk, $chunks ) = @_;
     die "Somethiong is wrong with BAM file - no pairs found" unless $stats{'total'};
     die "Somethiong is wrong with BAM file" unless $stats{'nonclonal'};
-    
-    warn "--------- Progress report -----------------------\n";
-    warn "Currently at ",$lib_id2," lib, ",$cfg{$lib_id2}{'name'},"\n";
-    warn "Currently at chunk ",($curr_chunk+1)," / $chunks\n";
-    warn "Currently at chr $curr_chr : $curr_pos\n";
-    warn "BAM lines reads  : ",$lines_read*2,"\n";
-    warn "Pairs processed  : $stats{'total'}\n";
-    warn "Non-clonal pairs : $stats{'nonclonal'}\t",100*$stats{'nonclonal'}/$stats{'total'},"%\n" if $cfg{'Distribution'}{'remove_clonal'};
-    warn "Consistent pairs : $stats{'consistent'}\t",100*$stats{'consistent'}/$stats{'nonclonal'},"%\n";
-    warn "Balance ",$stats{'balance'}, "\n";
-    my $inv = $stats{'HH'}+$stats{'hh'}+$stats{'TT'}+$stats{'tt'};
-    warn "Inverted pairs   : $inv\t",100*$inv/$stats{'nonclonal'},"%\n";
-    my $anti = $stats{'HT'}+$stats{'ht'};
-    warn "Everted pairs    : $anti\t",100*$anti/$stats{'nonclonal'},"%\n";
-    warn "Remote pairs     : $stats{'remote'}\t",100*$stats{'remote'}/$stats{'nonclonal'},"%\n";
-    
-    warn 'keys fwd'."\t".scalar(keys %fwd),"\n";
-    warn 'keys rev'."\t".scalar(keys %rev),"\n";
-    warn 'keys nuq'."\t".scalar(keys %nuq),"\n";
-    warn 'keys seen'."\t".scalar(keys %seen),"\n";
-    warn 'f'."\t".$f,"\n";
-    warn 'r'."\t".$r,"\n";
+    my $inv = 0;
+    foreach ( 'HH', 'hh', 'TT', 'tt' ) {
+        $inv += $stats{$_} if exists( $stats{$_} );
+    }    
+    my $evr = 0;
+    foreach ( 'HT', 'ht' ) {
+        $evr += $stats{$_} if exists( $stats{$_} );
+    }
+    my $rem = 0;
+    $rem+=$stats{'remote'} if exists( $stats{'remote'} );
+    print join( ' ', 'now at', $curr_chr.':'.$curr_pos,
+                    'pairs:'.$stats{'total'},
+                    'good:'.$stats{'consistent'},
+                    'inv:'.$inv,
+                    'evr:'.$evr,
+                    'rem:'.$rem,
+                    '       ',
+              ), "\r";
     clean($lib_id2) if $lines_read % 10_000_000 == 0 and scalar(keys %fwd) + scalar(keys %rev) + scalar(keys %nuq) > 10_000_000;
-    warn 'keys fwd'."\t".scalar(keys %fwd),"\n";
-    warn 'keys rev'."\t".scalar(keys %rev),"\n";
-    warn 'keys nuq'."\t".scalar(keys %nuq),"\n";
-    warn 'keys seen'."\t".scalar(keys %seen),"\n";
 }
 
 sub save_distr {
@@ -358,9 +350,9 @@ sub clean {
     my $trim = $cfg{$lib_no}{'trim'} if exists($cfg{$lib_no}{'trim'});
     my @files = ( $cfg{$lib_no}{'fileF'} );
     push @files, $cfg{$lib_no}{'fileR'} if $cfg{$lib_no}{'fileR'};
+    print "Cleaning buffers\n";
     foreach my $file ( @files ) {
         my $i = 0;
-        warn "Cleaning unmapped from $file\n";
         open F3, $cfg{'General'}{'samtools_exe'}.' view -f 4 '.$file.' |' or die 'Could not open file '.$file.' for lib '.$lib_no;
         while ( <F3> ) {
             my ( $clone, $map_flag, $c, $p, $qual, $match ) = split /\t/;
@@ -377,6 +369,5 @@ sub clean {
             $i++;
         }
         close F3;
-        warn "$i processed\n";
     }
 }
