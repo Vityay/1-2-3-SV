@@ -7,6 +7,10 @@ use Config::Std;
 # Last modified 20120506
 
 my %cfg = ();
+my ( $chunk, $lib_id );
+my $chunk_count = 1;
+my $f = 0;
+my $r = 0;
 die "Cannot read configuration file 123SV.conf" unless -r '123SV.conf';
 read_config( '123SV.conf' => %cfg );
 check_parameters();
@@ -44,7 +48,7 @@ my %rev   = ();
 my %distr = (); 
 my %stats = ();
 my $lines_read = 0;
-my $lib_id = q{};
+my %nuq = ();
 
 foreach $lib_id ( sort {$a<=>$b} keys %lib_ids ) { 
 
@@ -55,12 +59,12 @@ foreach $lib_id ( sort {$a<=>$b} keys %lib_ids ) {
 
     die 'Incorrect number of chunks is given for library ',$lib_id, "\n" if $cfg{$lib_id}{'chunks'} !~ m/^[1-9]\d*$/;
 
-    undef %distr;
-    undef %stats;
-    undef %seen;
-    undef %fwd;
-    undef %rev;
-    
+    %distr = ();
+    %stats = ();
+    %seen = ();
+    %fwd = ();
+    %rev = ();
+    $chunk_count = $cfg{$lib_id}{'chunks'};
     read_paired( $lib_id );
     save_distr(  $lib_id );
     save_stats(  $lib_id );
@@ -75,7 +79,7 @@ sub check_parameters {
 sub read_paired {
 
     my $lib_id = shift;
-    my $lines_read = 0;
+    $lines_read = 0;
 
     my $lib = $cfg{$lib_id}{'name'};
     my $libprefix = $cfg{$lib_id}{'prefix'};
@@ -86,7 +90,8 @@ sub read_paired {
     open FNUCR, '>', 'sv_pairs_remote.'.$lib;
     open FNUCI, '>', 'sv_pairs_inversions.'.$lib;
     open FNUCE, '>', 'sv_pairs_evertions.'.$lib;
-    foreach my $chunk ( 0 .. ( $cfg{$lib_id}{'chunks'} - 1 ) ) {
+    foreach my $chunk2 ( 0 .. ( $cfg{$lib_id}{'chunks'} - 1 ) ) {
+        $chunk = $chunk2;
         undef %fwd;
         undef %rev;
         warn 'Started with chunk ', ($chunk + 1), ' of ', $cfg{$lib_id}{'chunks'}, ' for lib # ', $lib_id,' : ', $lib,' type ', $lib_type, "\n";
@@ -96,53 +101,64 @@ sub read_paired {
             # Forward read
             unless (eof(F1)) {
                 my $line1 = <F1>;
-                my ( $chr, $pos, $strand, $clone, $dir ) = get_coord( $lib_id, $line1 );
+                my ( $clone, $chr, $pos, $strand, $dir ) = get_coord( $lib_id, $line1 );
                 report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not(++$lines_read % 1_000_000);
-                
-                # Check whether we need this clone 
-                my $in_chunk = 1;
-                if ( $cfg{$lib_id}{'chunks'} > 1 ) {
-                    my $sum = 0;
-                    map { $sum += ord($_) } split //, $clone;
-                    $in_chunk = 0 unless $sum % $cfg{$lib_id}{'chunks'} == $chunk;
-                    
+                if ( !$clone or not(in_chunk($clone)) ) { # not from lib or chunk
+                    ; #do nothings
                 }
-
-                if ( $chr and $in_chunk ) { # Unambig mapped tag
-                    die "error: multiple mapping position of forward tag for clone $clone" if exists( $fwd{ $clone } );
-
-                    if ( $dir eq 'F' ) {
-                        $fwd{$clone} = join("\t", $chr, $strand, $pos ); 
-                        process_ditag( $clone, $lib_type ) if ( exists( $rev{$clone} ) );
+                elsif ( $clone and !defined($chr) ) { # unmapped or non-unique
+		    if ( exists($fwd{$clone}) or exists($rev{$clone}) or exists($nuq{$clone}) ) { # erase if pair seen
+		        free($clone);
+		    }
+		    else { #mark if pair not seen
+		         $nuq{$clone} = 1;
+		    }
+                }
+                else { # mapped uniquely
+                    if ( exists($nuq{$clone}) ) {
+                        free($clone);
                     }
-                    elsif ($dir eq 'R' ) {
-                        $rev{$clone} = join("\t", $chr, $strand, $pos ); 
-                        process_ditag( $clone, $lib_type ) if ( exists( $fwd{$clone} ) );
+                    else {
+                        if ( $dir eq 'F' ) {
+                            $fwd{$clone} = join("\t", $chr, $strand, $pos );
+                            $f++; 
+                            process_ditag( $clone, $lib_type ) if ( exists( $rev{$clone} ) );
+                        }
+                        elsif ($dir eq 'R' ) {
+                            $rev{$clone} = join("\t", $chr, $strand, $pos );
+                            $r++; 
+                            process_ditag( $clone, $lib_type ) if ( exists( $fwd{$clone} ) );
+                        }
                     }
                 }
             }
 
             # Reverse read
-            unless ( eof(F2) ) {
+            unless ( $cfg{$lib_id}{'fileR'}and eof(F2) ) {
                 my $line1 = <F2>;
-                my ( $chr, $pos, $strand, $clone, $dir ) = get_coord( $lib_id, $line1 );
+                my ( $clone, $chr, $pos, $strand, $dir ) = get_coord( $lib_id, $line1 );
                 $dir = 'R';
                 report_stats( $chr, $pos, $lib_id, $chunk, $cfg{$lib_id}{'chunks'} ) if $chr and not( ++$lines_read % 1_000_000);
-                
-                # Check whether we need this clone 
-                my $in_chunk = 1;
-                if ( $cfg{$lib_id}{'chunks'} > 1 ) {
-                    my $sum = 0;
-                    map { $sum += ord($_) } split //, $clone;
-                    $in_chunk = 0 unless $sum % $cfg{$lib_id}{'chunks'} == $chunk;
-                    
+                if ( !$clone or not(in_chunk($clone)) ) { # not from lib or chunk
+                    ; #do nothing
                 }
-
-                if ( $chr and $in_chunk ) { # Unambig mapped tag
-                    die "error: multiple mapping position of forward tag for clone $clone" if exists( $rev{ $clone } );
-
-                    $rev{$clone} = join("\t", $chr, $strand, $pos );
-                    process_ditag( $clone, $lib_type ) if exists($fwd{$clone});
+                elsif ( $clone and !defined($chr) ) { # unmapped or non-unique
+		    if ( exists($fwd{$clone}) or exists($rev{$clone}) or exists($nuq{$clone}) ) { # erase if pair seen
+		        free($clone);
+		    }
+		    else { #mark if pair not seen
+		         $nuq{$clone} = 1;
+		    }
+                }
+                else { # mapped uniquely
+                    if ( exists($nuq{$clone}) ) {
+                        free($clone);
+                    }
+                    else {
+                        $rev{$clone} = join("\t", $chr, $strand, $pos );
+                        $r++; 
+                        process_ditag( $clone, $lib_type ) if ( exists( $fwd{$clone} ) );
+                    }
                 }
             }
         } # while !eof(F1) or !eof(F2)
@@ -159,18 +175,20 @@ sub get_coord {
     # Skip if prefix unless multi-lib BAM and prefix is specified
     if ( $cfg{$lib}{'prefix'} ) {
          my $prefix = $cfg{$lib}{'prefix'};
-         return unless $clone =~ m/$prefix/;
+         return() unless $clone =~ m/$prefix/;
     }
+    my $trim = $cfg{$lib}{'trim'} if exists($cfg{$lib}{'trim'});
+    $clone =~ s/$trim// if defined($trim);
 
     if ( $map_flag & 4 ) {
-        delete $fwd{$clone} if exists($fwd{$clone});
-        delete $rev{$clone} if exists($rev{$clone});
+        free( $clone );
+        return($clone);
     }
 
-    return if exists($cfg{'Distribution'}{'max_ambiguity'} ) and $line =~ m/X0\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'max_ambiguity' };
-    return if exists($cfg{'Distribution'}{'secondary_hits'}) and $line =~ m/X1\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'secondary_hits'};
-    return if exists($cfg{'Distribution'}{'alignment_gaps'}) and $line =~ m/XO\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'alignment_gaps'};
-    return if exists($cfg{'Distribution'}{'alignment_mismatches'}) and $line =~ m/XM\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'alignment_mismatches'};
+    return($clone) if exists($cfg{'Distribution'}{'max_ambiguity'} ) and $line =~ m/X0\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'max_ambiguity' };
+    return($clone) if exists($cfg{'Distribution'}{'secondary_hits'}) and $line =~ m/X1\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'secondary_hits'};
+    return($clone) if exists($cfg{'Distribution'}{'alignment_gaps'}) and $line =~ m/XO\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'alignment_gaps'};
+    return($clone) if exists($cfg{'Distribution'}{'alignment_mismatches'}) and $line =~ m/XM\:i\:(\d+)/ and $1 > $cfg{'Distribution'}{'alignment_mismatches'};
 
     my $strand = '+';
     if ( $map_flag & 16 ) {
@@ -183,11 +201,8 @@ sub get_coord {
         $strand = '-';
     }
     # Trim when needed
-    foreach my $trim ( $cfg{$lib}{'trim'} ) {
-        $clone =~ s/$trim// if $trim;
-    }
     my $dir = $map_flag & 128 ? 'R' : 'F';
-    return ( $c, $p, $strand, $clone, $dir );
+    return( $clone, $c, $p, $strand, $dir );
 }
 
 sub process_ditag {
@@ -196,9 +211,10 @@ sub process_ditag {
     my ( $c1, $s1, $p1 ) = split /\t/, $fwd{$clo};
     my ( $c2, $s2, $p2 ) = split /\t/, $rev{$clo};
 
+    my $ab = 1;
     $stats{'total'}++;
-    return if $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1; # we do not take it into account 
     if ( $c1 ne $c2 or abs($p1 - $p2 ) > $cfg{'Distribution'}{'max_distance'} ) { # remotely located di-tags
+        return if $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1; # we do not take it into account 
         $stats{'remote'}++;
         $stats{'nonclonal'}++;
         ( $c1, $c2, $p1, $p2 ) = ( $c2, $c1, $p2, $p1 ) if $c1 lt $c2 or ( $c1 eq $c2 and $p1 > $p2 );
@@ -219,10 +235,12 @@ sub process_ditag {
              
         }
         elsif ( uc($ori) eq 'HT' ) { # evertion
+            return if $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1; # we do not take it into account 
             ( $p1, $p2 ) = ( $p2, $p1 ) if $p1 > $p2; 
             print FNUCE join( "\t", $c1, int($p1/$cfg{'General'}{'bin_size'}), int($p2/$cfg{'General'}{'bin_size'})), "\n";
         }
         else { #inversion
+            return if $cfg{'Distribution'}{'remove_clonal'} and ++$seen{ join( "\t", $c1, $s1, $p1, $c2, $s2, $p2 )} > 1; # we do not take it into account 
             ( $p1, $p2 ) = ( $p2, $p1 ) if $p1 > $p2; 
             print FNUCI join( "\t", $c1, int($p1/$cfg{'General'}{'bin_size'}), int($p2/$cfg{'General'}{'bin_size'})), "\n";
         }     
@@ -273,6 +291,18 @@ sub report_stats {
     my $anti = $stats{'HT'}+$stats{'ht'};
     warn "Everted pairs    : $anti\t",100*$anti/$stats{'nonclonal'},"%\n";
     warn "Remote pairs     : $stats{'remote'}\t",100*$stats{'remote'}/$stats{'nonclonal'},"%\n";
+    
+    warn 'keys fwd'."\t".scalar(keys %fwd),"\n";
+    warn 'keys rev'."\t".scalar(keys %rev),"\n";
+    warn 'keys nuq'."\t".scalar(keys %nuq),"\n";
+    warn 'keys seen'."\t".scalar(keys %seen),"\n";
+    warn 'f'."\t".$f,"\n";
+    warn 'r'."\t".$r,"\n";
+    clean($lib_id2) if $lines_read % 10_000_000 == 0 and scalar(keys %fwd) + scalar(keys %rev) + scalar(keys %nuq) > 10_000_000;
+    warn 'keys fwd'."\t".scalar(keys %fwd),"\n";
+    warn 'keys rev'."\t".scalar(keys %rev),"\n";
+    warn 'keys nuq'."\t".scalar(keys %nuq),"\n";
+    warn 'keys seen'."\t".scalar(keys %seen),"\n";
 }
 
 sub save_distr {
@@ -301,6 +331,52 @@ sub save_stats {
 			    'Mapped_everted_perc'."\t".(100*$everted/$stats{'nonclonal'}),
 			    'Mapped_remote'."\t".$stats{'remote'},
 			    'Mapped_remote_perc'."\t".(100*$stats{'remote'}/$stats{'nonclonal'}),
+			    'keys fwd'."\t".scalar(keys %fwd),
+			    'keys rev'."\t".scalar(keys %rev),
+			    'keys nuq'."\t".scalar(keys %nuq),
+			    'keys seen'."\t".scalar(keys %seen),
 		    ),"\n";
 }
 
+sub free {
+    my $clone = shift;
+    delete $fwd{$clone} if exists($fwd{$clone});
+    delete $rev{$clone} if exists($rev{$clone});
+    delete $nuq{$clone} if exists($nuq{$clone});
+}
+
+sub in_chunk {
+    my $str = shift;
+    my ( $sum, $cnt ) = ( 0, 0 );
+    map { $sum += ord($_)*(++$cnt) } split //, $str;
+    return 1 if $sum % $chunk_count == $chunk;
+    return 0;
+}
+
+sub clean {
+    my $lib_no = shift;
+    my $trim = $cfg{$lib_no}{'trim'} if exists($cfg{$lib_no}{'trim'});
+    my @files = ( $cfg{$lib_no}{'fileF'} );
+    push @files, $cfg{$lib_no}{'fileR'} if $cfg{$lib_no}{'fileR'};
+    foreach my $file ( @files ) {
+        my $i = 0;
+        warn "Cleaning unmapped from $file\n";
+        open F3, $cfg{'General'}{'samtools_exe'}.' view -f 4 '.$file.' |' or die 'Could not open file '.$file.' for lib '.$lib_no;
+        while ( <F3> ) {
+            my ( $clone, $map_flag, $c, $p, $qual, $match ) = split /\t/;
+  
+            # Skip if prefix unless multi-lib BAM and prefix is specified
+            if ( $cfg{$lib_no}{'prefix'} ) {
+                 my $prefix = $cfg{$lib_no}{'prefix'};
+                 next unless $clone =~ m/$prefix/;
+            }
+            $clone =~ s/$trim// if defined($trim);
+            delete $fwd{$clone} if exists($fwd{$clone});
+            delete $rev{$clone} if exists($rev{$clone});
+            delete $nuq{$clone} if exists($nuq{$clone});
+            $i++;
+        }
+        close F3;
+        warn "$i processed\n";
+    }
+}
