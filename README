@@ -1,4 +1,4 @@
-1-2-3-SV pipeline description
+<h2>1-2-3-SV pipeline description</h2>
 Pipeline is available from gitHub, under URL https://github.com/Vityay/1-2-3-SV
 
 1. NGS data alignment
@@ -28,7 +28,7 @@ uniqueness of mapping(max_ambiguity = X0), absence of secondary hits
 (secondary_hits = X1), absence of gaps(alignment_gaps = XO), or even mismatches
 (alignment_mismatches = XM) in the read-to-reference alignment. When big datasets   
 need to be analysed on a workstation with small RAM size analysis can be
-serialized (“chunks” option), at the expense of additional computation time.
+serialized (ï¿½chunksï¿½ option), at the expense of additional computation time.
 
 Modify: configuration file 123SV.conf
 Run: 123SV1.pl <library_id>
@@ -43,8 +43,8 @@ in agglomerative manner. Two pairs are considered to belong to the same cluster
 when distance between coordinates of their 5-prime tags together with distance
 between 3-prime tags does not exceed x times median distance of the library with
 bigger insert sizes (from the two libraries where the clones belong).  Parameter
-x is given by “SV_max_distance” parameter in configuration file and is set to 1
-by default. Search is continued until no clusters with at least “SV_min_clones”
+x is given by ï¿½SV_max_distanceï¿½ parameter in configuration file and is set to 1
+by default. Search is continued until no clusters with at least ï¿½SV_min_clonesï¿½
 can be found.
 
 This step can be serialized by chromosomes or genome ranges to limit memory
@@ -72,7 +72,7 @@ in brackets.
 
 Column 8: Relative orientation and strand of the tag pairs in the SV call.
 Specifies the number of observed tags that link first segment to second in
-“tail-to-head” (TH, 3-prime of first segment is linked to 5-prime of second
+ï¿½tail-to-headï¿½ (TH, 3-prime of first segment is linked to 5-prime of second
 segment) or any other combination. Strand of first read in the pair is reflected
 as well: big caps for plus strand (e.g. 'TH') and small caps for minus strand
 (e.g. 'th').
@@ -88,7 +88,7 @@ columns 1-3 and 4-6) estimated by most optimal fitting with insert size
 distribution observed at step #2. Significantly negative values may represent
 complex SV events with local rearrangement of genomic segments.
 
-Column 12: Relative probability (compared to a “best case” scenario where
+Column 12: Relative probability (compared to a ï¿½best caseï¿½ scenario where
 all pairs have modal insert size) through all clones in the cluster.  Low values
 ( < 0.4 ) may indicate compound SV clusters and can be avoided by lowering
 SV_max_distance parameter in configuration file.
